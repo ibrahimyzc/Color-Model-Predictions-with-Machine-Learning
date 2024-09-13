@@ -1,0 +1,202 @@
+---
+title: "Part 5 - Imbalanced Data"
+author: "Ibrahim Yazici"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+We use the `tidyverse` suite of packages.  
+
+```{r, load_tidyverse}
+library(tidyverse)
+```
+
+## Read data
+
+The code chunk below reads in the final project bonus data.  
+
+```{r, read_final_data}
+dfb <- readr::read_csv("paint_project_bonus_data.csv", col_names = TRUE)
+```
+
+The `readr::read_csv()` function displays the data types and column names associated with the data. However, a glimpse is shown below that reveals the number of rows and also shows some of the representative values for the columns.  
+
+```{r, show_data_glimpse, eval = FALSE}
+dfb %>% glimpse()
+```
+
+The data consist of continuous and categorical inputs. The `glimpse()` shown above reveals the data type for each variable which state to you whether the input is continuous or categorical. The RGB color model inputs, `R`, `G`, and `B` are continuous (dbl) inputs. The HSL color model inputs consist of 2 categorical inputs, `Lightness` and `Saturation`, and a continuous input, `Hue`.
+
+## Binary classification task
+
+The Binary output variable, `outcome`, is a numeric variable.  
+
+```{r, show_outcome_class}
+dfb %>% pull(outcome) %>% class()
+```
+
+However, there are **only** two unique values for `outcome`.  
+
+```{r, show_outcome_values}
+dfb %>% count(outcome)
+```
+
+Below we create the dataset `dfbbb` for classification task with imbalanced data.
+
+```{r, make_iiiD_data}
+dfbb <- dfb %>% 
+  select(-response) %>% 
+  mutate(challenge_outcome = ifelse(challenge_outcome == 1, 'event', 'non_event'),
+         challenge_outcome = factor(challenge_outcome, levels = c('event', 'non_event')))
+dfbbb <- dfbb %>% 
+  select(-outcome)
+```
+
+We observe counts of Lightness Categories below.
+
+```{r, a1, eval = FALSE}
+ggplot(dfbbb, aes(x = Lightness)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Lightness Categories", x = "Lightness", y = "Count")
+```
+
+We observe counts of Saturation Categories below.
+
+```{r, a2, eval = FALSE}
+ggplot(dfbbb, aes(x = Saturation)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Saturation Categories", x = "Saturation", y = "Count")
+```
+
+Below we create, prepare and apply a recipe to deal with low frequency categorical inputs and near zero variance features:
+
+```{r, a3}
+library(caret)
+library(recipes)
+
+recipe_obj <- recipe(challenge_outcome ~ ., data = dfbbb) %>%
+  step_other(all_nominal(), threshold = 0.05) %>% 
+  step_nzv(all_predictors()) 
+
+prepped_recipe <- prep(recipe_obj, training = dfbbb)
+
+final_data <- bake(prepped_recipe, dfbbb)
+```
+
+We observe counts of Lightness Categories in the dataset `final_data` below.
+
+```{r, a4, eval = FALSE}
+ggplot(final_data, aes(x = Lightness)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Lightness Categories", x = "Lightness", y = "Count")
+```
+
+We observe counts of Lightness Saturation in the dataset `final_data` below.
+
+```{r, a5, eval = FALSE}
+ggplot(final_data, aes(x = Saturation)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Saturation Categories", x = "Saturation", y = "Count")
+```
+
+We observe counts of challenge_outcome variable below.
+
+```{r, a6}
+final_data %>% 
+  ggplot(mapping = aes(x = challenge_outcome)) +
+  geom_bar() +
+  theme_bw()
+summary(final_data$challenge_outcome)
+```
+
+Below we use `upSample` method to deal with output class imbalance:
+
+```{r, a7}
+balanced_data <- upSample(x = final_data[, names(final_data) != "challenge_outcome"], 
+                            y = final_data$challenge_outcome)
+
+final_data_balanced <- cbind(balanced_data[, -ncol(balanced_data)], challenge_outcome = balanced_data$Class)
+
+final_data_balanced$Class <- NULL 
+```
+
+We observe counts of challenge_outcome variable in the dataset `final_data_balanced` below.
+
+```{r, a8}
+final_data_balanced %>% 
+  ggplot(mapping = aes(x = challenge_outcome)) +
+  geom_bar() +
+  theme_bw()
+summary(final_data_balanced$challenge_outcome)
+```
+
+We must specify a resampling scheme and a primary performance metric. Let’s use 5-fold cross-validation with 3-repeats. Our primary performance metric will be Accuracy.
+
+```{r, a9}
+my_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+
+my_metric <- "Accuracy"
+```
+
+Below we train and tune 3 models, Gradient boosted tree, Random forest, and Neural network.
+
+```{r, a10}
+set.seed(2023)
+
+fit_xgb <- train(challenge_outcome ~ ., 
+                     data = final_data_balanced, 
+                     method = "xgbTree", 
+                     metric = my_metric, 
+                     trControl = my_ctrl, 
+                     verbosity = 0,
+                     nthread = 1)
+```
+
+```{r, a11}
+set.seed(2023)
+
+fit_rf <- train(challenge_outcome ~ .,
+                data = final_data_balanced,
+                method = "rf",
+                metric = my_metric,
+                trControl = my_ctrl,
+                importance = TRUE)
+```
+
+```{r, a111}
+set.seed(2023)
+
+fit_nnet <- train(challenge_outcome ~ .,
+                    data = final_data_balanced,
+                    method = "nnet",
+                    metric = my_metric,
+                    preProcess = c("center", "scale"),
+                    trControl = my_ctrl,
+                    trace = FALSE)
+```
+
+Let’s compare the models. We compile the resampling results together.
+
+```{r, a12}
+my_results <- resamples(list(NNET = fit_nnet,
+                             RF = fit_rf,
+                             XGB = fit_xgb))
+```
+
+Compare models based on Accuracy.
+
+```{r, a13}
+dotplot(my_results, metric = "Accuracy")
+```
+
+Based on the results above, we observe that the Random forest method performs better than the other two methods.
+

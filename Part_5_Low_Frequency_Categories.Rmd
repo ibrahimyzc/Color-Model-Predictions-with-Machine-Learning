@@ -1,0 +1,164 @@
+---
+title: "Part 5 - Low Frequency Categories"
+author: "Ibrahim Yazici"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+We use the `tidyverse` suite of packages.  
+
+```{r, load_tidyverse}
+library(tidyverse)
+```
+
+## Read data
+
+The code chunk below reads in the final project bonus data.  
+
+```{r, read_final_data}
+dfb <- readr::read_csv("paint_project_bonus_data.csv", col_names = TRUE)
+```
+
+The `readr::read_csv()` function displays the data types and column names associated with the data. However, a glimpse is shown below that reveals the number of rows and also shows some of the representative values for the columns.  
+
+```{r, show_data_glimpse, eval = FALSE}
+dfb %>% glimpse()
+```
+
+The data consist of continuous and categorical inputs. The `glimpse()` shown above reveals the data type for each variable which state to you whether the input is continuous or categorical. The RGB color model inputs, `R`, `G`, and `B` are continuous (dbl) inputs. The HSL color model inputs consist of 2 categorical inputs, `Lightness` and `Saturation`, and a continuous input, `Hue`.
+
+## Binary classification task
+
+The Binary output variable, `outcome`, is a numeric variable.  
+
+```{r, show_outcome_class}
+dfb %>% pull(outcome) %>% class()
+```
+
+However, there are **only** two unique values for `outcome`.  
+
+```{r, show_outcome_values}
+dfb %>% count(outcome)
+```
+
+As stated previously, `outcome = 1` denotes the **EVENT** while `outcome = 0` denotes the **NON-EVENT**. Thus, the `outcome` variable uses the 0/1 encoding! This encoding is appropriate for `glm()` and the functions we create in homework assignments, and lecture examples. However, `caret` and `tidymodels` prefer a different encoding. 
+
+Below we create the dataset `dfbbb` for classification task with low frequency categories.
+
+```{r, make_iiiD_data}
+dfbb <- dfb %>% 
+  select(-response) %>% 
+  mutate(outcome = ifelse(outcome == 1, 'event', 'non_event'),
+         outcome = factor(outcome, levels = c('event', 'non_event')))
+dfbbb <- dfbb %>% 
+  select(-challenge_outcome)
+```
+
+We observe counts of Lightness Categories below.
+
+```{r, a1, eval = FALSE}
+ggplot(dfbbb, aes(x = Lightness)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Lightness Categories", x = "Lightness", y = "Count")
+```
+
+We observe counts of Saturation Categories below.
+
+```{r, a2, eval = FALSE}
+ggplot(dfbbb, aes(x = Saturation)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Saturation Categories", x = "Saturation", y = "Count")
+```
+
+Below we create, prepare and apply a recipe to deal with low frequency categorical inputs and near zero variance features:
+
+```{r, a3}
+library(caret)
+library(recipes)
+
+recipe_obj <- recipe(outcome ~ ., data = dfbbb) %>%
+  step_other(all_nominal(), threshold = 0.05) %>%
+  step_nzv(all_predictors()) 
+
+prepped_recipe <- prep(recipe_obj, training = dfbbb)
+
+final_data <- bake(prepped_recipe, dfbbb)
+```
+
+We observe counts of Lightness Categories in the dataset `final_data` below.
+
+```{r, a4, eval = FALSE}
+ggplot(final_data, aes(x = Lightness)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Lightness Categories", x = "Lightness", y = "Count")
+```
+
+We observe counts of Lightness Saturation in the dataset `final_data` below.
+
+```{r, a5, eval = FALSE}
+ggplot(final_data, aes(x = Saturation)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  labs(title = "Count of Saturation Categories", x = "Saturation", y = "Count")
+```
+
+We must specify a resampling scheme and a primary performance metric. Let’s use 5-fold cross-validation with 3-repeats. Our primary performance metric will be Accuracy.
+
+```{r, a6}
+my_ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+
+my_metric <- "Accuracy"
+```
+
+Below we train and tune 2 models, Gradient boosted tree and Random forest.
+
+```{r, a7}
+set.seed(2023)
+
+fit_xgb <- train(outcome ~ ., 
+                     data = final_data, 
+                     method = "xgbTree", 
+                     metric = my_metric, 
+                     trControl = my_ctrl, 
+                     verbosity = 0,
+                     nthread = 1)
+```
+
+
+```{r, a8}
+set.seed(2023)
+
+fit_rf <- train(outcome ~ .,
+                data = final_data,
+                method = "rf",
+                metric = my_metric,
+                trControl = my_ctrl,
+                importance = TRUE)
+```
+
+Let’s compare the models. We compile the resampling results together.
+
+```{r, a9}
+my_results <- resamples(list(RF = fit_rf,
+                             XGB = fit_xgb))
+```
+
+Compare models based on Accuracy.
+
+```{r, a10}
+dotplot(my_results, metric = "Accuracy")
+```
+
+Based on the results above, Random forest method performs better than the Gradient boosted tree.
+
+
+
+
